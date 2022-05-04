@@ -8,7 +8,6 @@ plugins {
 }
 
 group = "com.leader"
-version = "0.0.1-SNAPSHOT"
 java.sourceCompatibility = JavaVersion.VERSION_17
 
 repositories {
@@ -42,4 +41,8 @@ tasks.withType<KotlinCompile> {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
+}
+
+tasks.getByName<Jar>("jar") {  // disable producing plain.jar
+	enabled = false
 }

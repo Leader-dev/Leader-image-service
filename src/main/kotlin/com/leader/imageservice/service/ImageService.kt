@@ -13,6 +13,7 @@ import com.leader.imageservice.util.component.DateUtil
 import com.leader.imageservice.util.component.RandomUtil
 import org.bson.types.ObjectId
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.util.*
 import java.util.function.Consumer
@@ -28,10 +29,12 @@ class ImageService @Autowired constructor(
 
     companion object {
         const val UPLOAD_LINK_EXPIRE_MILLISECONDS: Long = 30000
-        const val MAXIMUM_TEMP_UPLOAD_COUNT: Long = 9
         const val FILE_PREFIX = "v2_"
         const val RANDOM_SALT_LENGTH = 32
     }
+
+    @Value("\${leader.max-temp-upload}")
+    val maxTempUploadCount: Long = 20
 
     private val currentUserIdOrAdminId: ObjectId
         get() = contextService.userId ?: contextService.adminId ?: throw UserAuthException()
@@ -99,7 +102,7 @@ class ImageService @Autowired constructor(
         if (count == 1) {
             return listOf(generateNewUploadUrl())
         }
-        if (count > MAXIMUM_TEMP_UPLOAD_COUNT) {
+        if (count > maxTempUploadCount) {
             throw InternalErrorException("Count too large.")
         }
         val userId = currentUserIdOrAdminId

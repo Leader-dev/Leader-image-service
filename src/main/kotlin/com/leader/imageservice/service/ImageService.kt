@@ -6,9 +6,7 @@ import com.leader.imageservice.data.ImageRecord.Companion.PENDING
 import com.leader.imageservice.data.ImageRecord.Companion.USING
 import com.leader.imageservice.data.ImageRecordRepository
 import com.leader.imageservice.resource.StaticResourceStorage
-import com.leader.imageservice.util.InternalErrorException
-import com.leader.imageservice.util.MultitaskUtil
-import com.leader.imageservice.util.UserAuthException
+import com.leader.imageservice.util.*
 import com.leader.imageservice.util.component.DateUtil
 import com.leader.imageservice.util.component.RandomUtil
 import org.bson.types.ObjectId
@@ -16,13 +14,11 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.util.*
-import java.util.function.Consumer
 
 @Service
 class ImageService @Autowired constructor(
     private val resourceStorage: StaticResourceStorage,
     private val imageRecordRepository: ImageRecordRepository,
-    private val contextService: ContextService,
     private val randomUtil: RandomUtil,
     private val dateUtil: DateUtil
 ) {
@@ -36,10 +32,10 @@ class ImageService @Autowired constructor(
     @Value("\${leader.max-temp-upload}")
     val maxTempUploadCount: Long = 20
 
-    private val currentUserIdOrAdminId: ObjectId
-        get() = contextService.userId ?: contextService.adminId ?: throw UserAuthException()
     private val expirationSinceNow: Date
         get() = Date(dateUtil.getCurrentTime() + UPLOAD_LINK_EXPIRE_MILLISECONDS)
+    val accessStartUrl: String
+        get() = resourceStorage.accessStartUrl
 
     private fun allocateNewImageUrl(userId: ObjectId, expiration: Date): String {
         // insert the new record
@@ -67,61 +63,51 @@ class ImageService @Autowired constructor(
     }
 
     private fun setRecordsToInvalid(records: List<ImageRecord>) {
-        records.forEach(Consumer<ImageRecord> { record: ImageRecord -> record.status = INVALID })
+        records.forEach { it.status = INVALID }
         imageRecordRepository.saveAll(records)
     }
 
     private fun cleanUpInvalidImages() {  // only way to completely remove images
-        val userId = currentUserIdOrAdminId
-
-        // find invalid and expired records, extracting url part
-        val invalidAndExpiredRecords: List<ImageRecord> = imageRecordRepository
-            .findByUploadUserIdAndStatusAndUploadUrlExpireBefore(userId, INVALID, dateUtil.getCurrentDate())
-        val imageUrls = invalidAndExpiredRecords.stream()
-            .map { record: ImageRecord -> record.imageUrl }
-            .toList()
-
-        // delete all images according to urls
-        MultitaskUtil.forEach(imageUrls) { imageUrl ->
-            resourceStorage.deleteFile(imageUrl)
-            imageRecordRepository.deleteByImageUrl(imageUrl)
-        }
+        // find invalid and expired records, extracting url part, and delete the files
+        imageRecordRepository
+            .findByStatusAndUploadUrlExpireBefore(INVALID, dateUtil.getCurrentDate())
+            .map { it.imageUrl }
+            .forEachAsync { imageUrl ->
+                resourceStorage.deleteFile(imageUrl)
+                imageRecordRepository.deleteByImageUrl(imageUrl)
+            }
     }
 
-    fun generateNewUploadUrl(): String {
-        val userId = currentUserIdOrAdminId
+    fun generateNewUploadUrl(userId: ObjectId): String {
         val expiration = expirationSinceNow
         val imageUrl = allocateNewImageUrl(userId, expiration)
         return resourceStorage.generatePresignedUploadUrl(imageUrl, expiration).toString()
     }
 
-    fun generateNewUploadUrls(count: Int): List<String> {
+    fun generateNewUploadUrls(userId: ObjectId, count: Int): List<String> {
         if (count == 0) {
             return emptyList()
         }
         if (count == 1) {
-            return listOf(generateNewUploadUrl())
+            return listOf(generateNewUploadUrl(userId))
         }
         if (count > maxTempUploadCount) {
             throw InternalErrorException("Count too large.")
         }
-        val userId = currentUserIdOrAdminId
         val expiration = expirationSinceNow
-        val uploadUrls = Array(count) { "" }
-        MultitaskUtil.forI(count) { targetIndex ->
+        val uploadUrls = MutableList(count) { "" }
+        forTimesAsync(count) { targetIndex ->
             val imageUrl = allocateNewImageUrl(userId, expiration)
             val uploadUrl: String = resourceStorage.generatePresignedUploadUrl(imageUrl, expiration).toString()
             uploadUrls[targetIndex] = uploadUrl
         }
-        return uploadUrls.toList()
+        return uploadUrls
     }
 
-    fun duplicateImage(imageUrl: String?): String? {
-        if (imageUrl == null) {
-            return null
-        }
-        val userId = currentUserIdOrAdminId
-        val newUrl = allocateNewImageUrl(userId, dateUtil.getCurrentDate())
+    fun duplicateImage(imageUrl: String): String? {
+        val imageRecord = imageRecordRepository.findByImageUrl(imageUrl)
+            ?: return null
+        val newUrl = allocateNewImageUrl(imageRecord.uploadUserId, dateUtil.getCurrentDate())
         resourceStorage.copyFile(imageUrl, newUrl)
         confirmUploadImage(newUrl)
         return newUrl
@@ -131,9 +117,8 @@ class ImageService @Autowired constructor(
         if (imageUrl == null) {
             return
         }
-        val userId = currentUserIdOrAdminId
         val recordExists: Boolean =
-            imageRecordRepository.existsByUploadUserIdAndImageUrlAndStatus(userId, imageUrl, PENDING)
+            imageRecordRepository.existsByImageUrlAndStatus(imageUrl, PENDING)
         if (!recordExists || !resourceStorage.fileExists(imageUrl)) {
             throw InternalErrorException("Image not uploaded.")
         }
@@ -143,9 +128,12 @@ class ImageService @Autowired constructor(
         if (imageUrls == null || imageUrls.isEmpty()) {
             return
         }
-        val userId = currentUserIdOrAdminId
+        if (imageUrls.size == 1) {
+            assertUploadedTempImage(imageUrls[0])
+            return
+        }
         for (imageUrl in imageUrls) {
-            if (!imageRecordRepository.existsByUploadUserIdAndImageUrlAndStatus(userId, imageUrl, PENDING)) {
+            if (!imageRecordRepository.existsByImageUrlAndStatus(imageUrl, PENDING)) {
                 throw InternalErrorException("Images not uploaded.")
             }
         }
@@ -158,8 +146,7 @@ class ImageService @Autowired constructor(
         if (imageUrl == null) {
             return
         }
-        val userId = currentUserIdOrAdminId
-        val record = imageRecordRepository.findByUploadUserIdAndImageUrlAndStatus(userId, imageUrl, PENDING)
+        val record = imageRecordRepository.findByImageUrlAndStatus(imageUrl, PENDING)
         if (record == null || !resourceStorage.fileExists(imageUrl)) {
             throw InternalErrorException("Image not uploaded.")
         }
@@ -171,11 +158,10 @@ class ImageService @Autowired constructor(
         if (imageUrls == null || imageUrls.isEmpty()) {
             return
         }
-        val userId = currentUserIdOrAdminId
         val records = mutableListOf<ImageRecord>()
         for (imageUrl in imageUrls) {
             val record: ImageRecord =
-                imageRecordRepository.findByUploadUserIdAndImageUrlAndStatus(userId, imageUrl, PENDING)
+                imageRecordRepository.findByImageUrlAndStatus(imageUrl, PENDING)
                     ?: throw InternalErrorException("Images not uploaded.")
             records.add(record)
         }
@@ -206,12 +192,8 @@ class ImageService @Autowired constructor(
         cleanUpInvalidImages()
     }
 
-    fun cleanUp() {
-        val userId = currentUserIdOrAdminId
+    fun cleanUp(userId: ObjectId) {
         setRecordsToInvalid(imageRecordRepository.findByUploadUserIdAndStatus(userId, PENDING))
         cleanUpInvalidImages()
     }
-
-    val accessStartUrl: String
-        get() = resourceStorage.accessStartUrl
 }

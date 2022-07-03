@@ -39,7 +39,7 @@ class ImageInfoMessageQueue @Autowired constructor(
                 println("Type delete")
                 imageService.deleteImages(imageUrls)
                 println("Delete succeed")
-            }else {
+            } else {
                 throw IllegalArgumentException("operation is not supported")
             }
             println("Operation succeed.")

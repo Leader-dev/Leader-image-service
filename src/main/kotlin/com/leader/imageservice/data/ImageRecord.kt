@@ -27,7 +27,7 @@ interface ImageRecordRepository : MongoRepository<ImageRecord, ObjectId> {
 
     fun existsByImageUrl(imageUrl: String): Boolean
 
-    fun existsByUploadUserIdAndImageUrlAndStatus(uploadUserId: ObjectId, imageUrl: String, status: String): Boolean
+    fun existsByImageUrlAndStatus(imageUrl: String, status: String): Boolean
 
     fun findByImageUrl(imageUrl: String): ImageRecord?
 
@@ -35,9 +35,9 @@ interface ImageRecordRepository : MongoRepository<ImageRecord, ObjectId> {
 
     fun findByUploadUserIdAndStatus(uploadUserId: ObjectId, status: String): List<ImageRecord>
 
-    fun findByUploadUserIdAndImageUrlAndStatus(uploadUserId: ObjectId, imageUrl: String, status: String): ImageRecord?
+    fun findByImageUrlAndStatus(imageUrl: String, status: String): ImageRecord?
 
-    fun findByUploadUserIdAndStatusAndUploadUrlExpireBefore(uploadUserId: ObjectId, status: String, uploadUrlExpire: Date): List<ImageRecord>
+    fun findByStatusAndUploadUrlExpireBefore(status: String, uploadUrlExpire: Date): List<ImageRecord>
 
     fun deleteByImageUrl(imageUrl: String)
 }

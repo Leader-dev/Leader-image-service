@@ -1,6 +1,6 @@
 package com.leader.imageservice.resource
 
-import com.leader.imageservice.util.MultitaskUtil
+import com.leader.imageservice.util.forEachAsync
 import java.io.InputStream
 import java.net.URL
 import java.util.*
@@ -22,7 +22,7 @@ interface StaticResourceStorage {
 
     fun allFilesExist(urls: List<String>): Boolean {
         val allExists = AtomicBoolean(true)
-        MultitaskUtil.forEach(urls) { url ->
+        urls.forEachAsync { url ->
             if (!fileExists(url)) {
                 allExists.set(false)
             }
